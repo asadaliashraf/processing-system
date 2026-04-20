@@ -2,10 +2,12 @@
   "name": "processing-produced-minutes",
   "version": "1.0.0",
   "scripts": {
+    "start": "node --experimental-sqlite server/server.js",
+    "build": "cd client && npm install && npm run build",
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "server": "cd server && npm run dev",
     "client": "cd client && npm run dev",
-    "setup-db": "cd server && node setupDb.js"
+    "setup-db": "cd server && node --experimental-sqlite setupDb.js"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

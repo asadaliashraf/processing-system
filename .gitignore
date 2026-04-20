@@ -3,4 +3,5 @@ dist/
 .env
 *.db
 *.sqlite
+server/processing.db
 node_modules
