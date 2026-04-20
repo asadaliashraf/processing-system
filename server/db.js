@@ -1,23 +1,16 @@
-const sql = require('mssql');
+const { DatabaseSync } = require('node:sqlite');
+const path = require('path');
 
-const config = {
-  server: 'DESKTOP-KKB5HLJ\\SQLEXPRESS',
-  database: 'ProcessingSystem',
-  user: 'ProcessingUser',
-  password: 'Processing@2024',
-  options: {
-    trustServerCertificate: true,
-    enableArithAbort: true,
-  },
-};
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'processing.db');
+let db;
 
-let pool = null;
-
-async function getPool() {
-  if (!pool) {
-    pool = await sql.connect(config);
+function getDb() {
+  if (!db) {
+    db = new DatabaseSync(DB_PATH);
+    db.exec('PRAGMA journal_mode = WAL');
+    db.exec('PRAGMA foreign_keys = ON');
   }
-  return pool;
+  return db;
 }
 
-module.exports = { getPool, sql };
+module.exports = { getDb };
