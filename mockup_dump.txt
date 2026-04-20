@@ -1,0 +1,8 @@
+=== MOCKUP SHEET (all rows) ===
+  Row 1: A1='DRYER & HYDRO QUEUE STATUS'
+  Row 3: A3='Dryer/Hydro' | B3='Type' | C3='Capacity\n(kg)' | D3='Status' | E3='Current\nBatch' | F3='Pair Codes' | G3='Weight\n(kg)' | H3='Duration\n(min)' | I3='Start' | J3='Est. End'
+  Row 4: A4='Traiventa-1' | B4='Dryer' | C4='240' | D4='RUNNING' | E4='82484' | F4='1001' | G4='180' | H4='40' | I4='12:00' | J4='12:40'
+  Row 5: A5='Traiventa-2' | B5='Dryer' | C5='240' | D5='IDLE'
+  Row 6: A6='Traiventa-3' | B6='Dryer' | C6='180' | D6='IDLE'
+  Row 7: A7='Hydro-1' | B7='Hydro' | C7='200' | D7='IDLE'
+  Row 8: A8='Hydro-2' | B8='Hydro' | C8='150' | D8='IDLE'
