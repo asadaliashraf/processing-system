@@ -12,6 +12,7 @@ import BatchProcess from './pages/BatchProcess';
 import ProcessingLog from './pages/ProcessingLog';
 import SummaryReport from './pages/SummaryReport';
 import DetailReport from './pages/DetailReport';
+import EfficiencyReport from './pages/EfficiencyReport';
 import MachineQueue from './pages/MachineQueue';
 import DryerQueue from './pages/DryerQueue';
 
@@ -34,6 +35,7 @@ export default function App() {
           <Route path="/processing-log" element={<ProcessingLog />} />
           <Route path="/summary-report" element={<SummaryReport />} />
           <Route path="/detail-report" element={<DetailReport />} />
+          <Route path="/efficiency-report" element={<EfficiencyReport />} />
           <Route path="/machine-queue" element={<MachineQueue />} />
           <Route path="/dryer-queue" element={<DryerQueue />} />
         </Routes>

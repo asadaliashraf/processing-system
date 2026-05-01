@@ -57,6 +57,8 @@ export default function Navbar() {
                 <li><NavLink to="/processing-log" className="dropdown-item">Processing Log</NavLink></li>
                 <li><NavLink to="/summary-report" className="dropdown-item">Summary Report</NavLink></li>
                 <li><NavLink to="/detail-report" className="dropdown-item">Detail Report</NavLink></li>
+                <li><hr className="dropdown-divider" /></li>
+                <li><NavLink to="/efficiency-report" className="dropdown-item">⚡ Efficiency Report</NavLink></li>
               </ul>
             </li>
 

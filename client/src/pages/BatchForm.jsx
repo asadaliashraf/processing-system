@@ -34,6 +34,9 @@ export default function BatchForm() {
   const [shift,         setShift]        = useState('Morning');
   const [operator,      setOperator]     = useState('');
   const [shiftIncharge, setShiftIncharge]= useState('');
+  const [splitMode,     setSplitMode]    = useState(false);  // false = quick (all together), true = split
+  const [quickMachine,  setQuickMachine] = useState('');
+  const [quickMachineCap, setQuickMachineCap] = useState(0);
 
   // ── LOAD AVAILABILITY ─────────────────────────────────────────────────────
   const loadAvailability = useCallback(() => {
@@ -104,6 +107,7 @@ export default function BatchForm() {
     const target = (bno || batchInput).trim();
     if (!target) return;
     setError(''); setMsg(''); setLoading(true);
+    setSplitMode(false); setQuickMachine(''); setQuickMachineCap(0);
     try {
       const data = await fetchBatchData(target);
       setBatches([data.batch]);
@@ -160,6 +164,7 @@ export default function BatchForm() {
     setBatches([]); setPairRows([]); setBatchInput('');
     setAddInput(''); setShowAddPanel(false);
     setMsg(''); setError('');
+    setSplitMode(false); setQuickMachine(''); setQuickMachineCap(0);
   };
 
   // ── ROW HELPERS ───────────────────────────────────────────────────────────
@@ -255,6 +260,54 @@ export default function BatchForm() {
     setSaving(false);
   };
 
+  // ── EXECUTE / COMPLETE A PLAN ────────────────────────────────────────────
+  const actOnPlan = async (planId, endpoint) => {
+    setError(''); setMsg('');
+    try {
+      const res  = await fetch(`/api/batch-process/${planId}/${endpoint}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' } });
+      const data = await res.json();
+      if (data.error) { setError(data.error); return; }
+      loadAvailability();
+      await refresh();
+    } catch (e) { setError(e.message); }
+  };
+
+  // ── SAVE ALL TOGETHER (quick mode) ───────────────────────────────────────
+  const saveAllTogether = async () => {
+    if (!batches.length || !quickMachine) { setError('Select a machine first'); return; }
+    const freePairRows = pairRows.filter(r => !r.planStatus || r.planStatus === 'PLANNED');
+    if (!freePairRows.length) { setError('All pair codes are already planned or in progress'); return; }
+    const totalWt = freePairRows.reduce((s, r) => s + r.weight, 0);
+    if (quickMachineCap > 0 && totalWt > quickMachineCap) {
+      setError(`Total weight ${totalWt.toFixed(2)}kg exceeds machine ${quickMachine} capacity of ${quickMachineCap}kg`);
+      return;
+    }
+    const batchNos = [...new Set(freePairRows.map(r => r.batchNo))];
+    const assignments = [{
+      batch_no:         batchNos.join('+'),
+      order_no:         batchNos.map(bn => batches.find(b => b.batch_no === bn)?.order_no || '').join('+'),
+      pair_codes:       freePairRows.map(r => r.pc),
+      pair_code_weight: totalWt,
+      machine:          quickMachine,
+      machine_cap:      quickMachineCap,
+      recipe:           freePairRows[0]?.recipe || '',
+      recipe_ct_hrs:    freePairRows[0]?.recipe_ct_hrs || 0,
+    }];
+    setSaving(true); setError(''); setMsg('');
+    try {
+      const res  = await fetch('/api/batch-form-v2/save', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ loadedBatchNos: batches.map(b => b.batch_no), assignments }),
+      });
+      const data = await res.json();
+      if (data.error) { setError(data.error); setSaving(false); return; }
+      setMsg('Saved! Go to Process Tracking to start processing.');
+      loadAvailability();
+      await refresh();
+    } catch (e) { setError(e.message); }
+    setSaving(false);
+  };
+
   // ── DERIVED VALUES ────────────────────────────────────────────────────────
   const totalProducedMin = pairRows.reduce((s, r) => s + calcSAM(r).producedMin, 0);
   const totalWeight      = pairRows.reduce((s, r) => s + r.weight, 0);
@@ -289,7 +342,7 @@ export default function BatchForm() {
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
       }}>
         <span style={{ color: '#fff', fontSize: '1.25rem', fontWeight: 700, letterSpacing: 1 }}>
-          EFlow Batch Entry
+          Batch Entry
         </span>
         <div style={{ textAlign: 'right', color: '#fff', fontSize: '0.8rem' }}>
           <div style={{ fontWeight: 700, fontSize: '1rem' }}>WelCome</div>
@@ -370,6 +423,33 @@ export default function BatchForm() {
           <label style={{ ...fLabel, marginLeft: 10 }}>Receive Doc</label>
           <input style={{ ...fInput, width: 110 }}
             value={batches.map(b => b.receive_doc).filter(Boolean).join(' / ')} readOnly />
+
+          {pairRows.length > 0 && !splitMode && (() => { const qs = pairRows.find(r=>r.planId)?.planStatus; return !qs || qs === 'PLANNED'; })() && (<>
+            <label style={{ ...fLabel, marginLeft: 10 }}>Machine</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <select style={{ ...fSelect, width: 200 }} value={quickMachine}
+                onChange={e => {
+                  const m = machines.find(x => x.machine_name === e.target.value);
+                  setQuickMachine(e.target.value);
+                  setQuickMachineCap(m ? +m.capacity_kg : 0);
+                }}>
+                <option value="">— select machine —</option>
+                {machines.map(m => {
+                  const busy = busyMachines[m.machine_name];
+                  const qc   = busy?.queue_count || 0;
+                  const label = busy?.batch_no
+                    ? `🟡 ${m.machine_name} [BUSY – B${busy.batch_no}${qc > 0 ? `, +${qc} queued` : ''}]`
+                    : `${m.machine_name} (${m.capacity_kg}kg)`;
+                  return <option key={m.id} value={m.machine_name}>{label}</option>;
+                })}
+              </select>
+              {quickMachine && busyMachines[quickMachine]?.batch_no && (
+                <span style={{ fontSize: '0.65rem', color: '#b8860b', fontWeight: 700 }}>
+                  🟡 Busy — will be queued after B{busyMachines[quickMachine].batch_no}
+                </span>
+              )}
+            </div>
+          </>)}
         </div>
 
         {/* Row 3 */}
@@ -440,19 +520,25 @@ export default function BatchForm() {
         </div>
       )}
 
-      {/* ── WORKFLOW HINT ─────────────────────────────────────────────────── */}
-      {pairRows.length > 0 && (
-        <div style={{ background: '#fff8dc', border: '1px solid #e6d87a', borderTop: 'none', padding: '5px 16px', fontSize: '0.72rem', color: '#555' }}>
-          <strong>WORKFLOW:</strong>&nbsp;
-          ✔ Check <b>1 pair code</b> → assign Machine &amp; Recipe → Save → <i>individual run</i>.&nbsp;
-          ✔ Check <b>multiple pair codes (same or different batches)</b> → assign <b>same Machine</b> → Save → <i>auto-clubbed (1 cycle)</i>.&nbsp;
-          ✔ Check multiple → assign <b>different Machines</b> → Save → <i>separate cycles each</i>.&nbsp;
-          Dryer &amp; Hydro are assigned in <b>Process Tracking</b> after processing completes.
-        </div>
+      {/* ── SPLIT MODE: individual pair code table ────────────────────────── */}
+      {pairRows.length > 0 && splitMode && (
+        <>
+          <div style={{ background: '#fff8dc', border: '1px solid #e6d87a', borderTop: 'none', padding: '5px 16px', fontSize: '0.72rem', color: '#555', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+            <span>
+              <strong>SPLIT MODE</strong> — Check pair codes individually to assign separate machines or group them.&nbsp;
+              ✔ Check &amp; assign <b>same Machine</b> → auto-clubbed.&nbsp;
+              ✔ Check &amp; assign <b>different Machines</b> → separate cycles.
+            </span>
+            <button style={{ ...btnBase, fontSize: '0.7rem', padding: '2px 10px' }}
+              onClick={() => { setSplitMode(false); setError(''); setMsg(''); }}>
+              ← Back to Quick Entry
+            </button>
+          </div>
+        </>
       )}
 
-      {/* ── PAIR CODE TABLE ───────────────────────────────────────────────── */}
-      {pairRows.length > 0 && (
+      {/* Pair code table — shown only in split mode */}
+      {pairRows.length > 0 && splitMode && (
         <div style={{ border: '1px solid #b0c4de', borderTop: 'none', overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: isMultiBatch ? 1350 : 1250 }}>
             <thead>
@@ -472,6 +558,7 @@ export default function BatchForm() {
                 <th style={{ ...thS, background: '#1a5c3a' }} colSpan={4}>SAM / kg</th>
                 <th style={thS} rowSpan={2}>Prod.<br />Min</th>
                 <th style={{ ...thS, background: '#5c3a1a' }} rowSpan={2}>Status</th>
+                <th style={{ ...thS, background: '#2e7d32' }} rowSpan={2}>Action</th>
               </tr>
               <tr>
                 <th style={{ ...thS, ...thSub, background: '#2d5a8e' }}>Dzns</th>
@@ -488,6 +575,16 @@ export default function BatchForm() {
               {(() => {
                 const rows = [];
                 let lastBatchNo = null;
+
+                // Pre-compute plan groups so we can rowSpan machine + action cells
+                const planIdToIndices = {};
+                pairRows.forEach((row, idx) => {
+                  if (row.planId) {
+                    if (!planIdToIndices[row.planId]) planIdToIndices[row.planId] = [];
+                    planIdToIndices[row.planId].push(idx);
+                  }
+                });
+
                 pairRows.forEach((row, idx) => {
                   // Insert batch separator row in multi-batch mode
                   if (isMultiBatch && row.batchNo !== lastBatchNo) {
@@ -511,6 +608,12 @@ export default function BatchForm() {
                   const sam      = calcSAM(row);
                   const isLocked = !!(row.planStatus && row.planStatus !== 'PLANNED');
                   const sc       = STATUS_COLOR[row.planStatus] || {};
+
+                  // rowSpan helpers for machine + action cells
+                  const planIdxs        = row.planId ? planIdToIndices[row.planId] : null;
+                  const isFirstInPlan   = planIdxs ? planIdxs[0] === idx : true;
+                  const isNotFirstInPlan= planIdxs ? planIdxs[0] !== idx : false;
+                  const planRowSpan     = planIdxs ? planIdxs.length : 1;
                   const bColor   = batchColorMap[row.batchNo] || '#1a3a5c';
                   const rowBg    = isLocked
                     ? '#efefef'
@@ -578,38 +681,40 @@ export default function BatchForm() {
                           onChange={e => update(idx, 'waste_pcs', e.target.value)} />
                       </td>
 
-                      {/* Machine */}
-                      <td style={tdS}>
-                        {isLocked
-                          ? <span style={{ fontWeight: 700, color: '#1a5c3a' }}>{row.machine}</span>
-                          : row.selected
-                            ? <>
-                                <select style={{ ...fSelect, width: 95 }}
-                                  value={row.machine}
-                                  onChange={e => onMachineChange(idx, e.target.value)}>
-                                  <option value="">— select —</option>
-                                  {machines.map(m => {
-                                    const busy = busyMachines[m.machine_name];
-                                    const qc   = busy?.queue_count || 0;
-                                    const label = busy?.batch_no
-                                      ? `🟡 ${m.machine_name} [BUSY – B${busy.batch_no}${qc > 0 ? `, +${qc} queued` : ''}]`
-                                      : `${m.machine_name} (${m.capacity_kg}kg)`;
-                                    return (
-                                      <option key={m.id} value={m.machine_name}>{label}</option>
-                                    );
-                                  })}
-                                </select>
-                                {row.machine && busyMachines[row.machine]?.batch_no && (
-                                  <div style={{ fontSize: '0.63rem', color: '#b8860b', fontWeight: 700 }}>
-                                    🟡 Busy — will be queued after B{busyMachines[row.machine].batch_no}
-                                  </div>
-                                )}
-                              </>
-                            : <span style={{ color: '#bbb', fontSize: '0.7rem' }}>check to assign</span>
-                        }
-                        {row.machine && !isLocked && row.selected && !busyMachines[row.machine] &&
-                          <div style={{ fontSize: '0.63rem', color: '#888' }}>{row.machine_cap} kg cap</div>}
-                      </td>
+                      {/* Machine — merged cell for clubbed planned rows */}
+                      {!isNotFirstInPlan && (
+                        <td style={tdS} rowSpan={planRowSpan}>
+                          {row.planId
+                            ? <span style={{ fontWeight: 700, color: '#1a5c3a' }}>{row.machine}</span>
+                            : row.selected
+                              ? <>
+                                  <select style={{ ...fSelect, width: 95 }}
+                                    value={row.machine}
+                                    onChange={e => onMachineChange(idx, e.target.value)}>
+                                    <option value="">— select —</option>
+                                    {machines.map(m => {
+                                      const busy = busyMachines[m.machine_name];
+                                      const qc   = busy?.queue_count || 0;
+                                      const label = busy?.batch_no
+                                        ? `🟡 ${m.machine_name} [BUSY – B${busy.batch_no}${qc > 0 ? `, +${qc} queued` : ''}]`
+                                        : `${m.machine_name} (${m.capacity_kg}kg)`;
+                                      return (
+                                        <option key={m.id} value={m.machine_name}>{label}</option>
+                                      );
+                                    })}
+                                  </select>
+                                  {row.machine && busyMachines[row.machine]?.batch_no && (
+                                    <div style={{ fontSize: '0.63rem', color: '#b8860b', fontWeight: 700 }}>
+                                      🟡 Busy — will queue after B{busyMachines[row.machine].batch_no}
+                                    </div>
+                                  )}
+                                  {row.machine && !busyMachines[row.machine] &&
+                                    <div style={{ fontSize: '0.63rem', color: '#888' }}>{row.machine_cap} kg cap</div>}
+                                </>
+                              : <span style={{ color: '#bbb', fontSize: '0.7rem' }}>check to assign</span>
+                          }
+                        </td>
+                      )}
 
                       {/* Recipe — read-only, set in Pair Codes master data */}
                       <td style={tdS}>
@@ -684,6 +789,31 @@ export default function BatchForm() {
                             : <span style={{ color: '#bbb', fontSize: '0.68rem' }}>—</span>
                         }
                       </td>
+
+                      {/* Action — Execute / Complete (merged for clubbed rows) */}
+                      {!isNotFirstInPlan && (
+                        <td style={{ ...tdS, textAlign: 'center', verticalAlign: 'middle', minWidth: 90 }} rowSpan={planRowSpan}>
+                          {row.planStatus === 'PLANNED' && (
+                            <button style={{ ...btnBase, background: 'linear-gradient(to bottom,#5cb85c,#3d8b3d)', color: '#fff', border: '1px solid #3d8b3d', padding: '3px 10px', fontSize: '0.7rem' }}
+                              onClick={() => actOnPlan(row.planId, 'start-processing')}>
+                              ▶ Execute
+                            </button>
+                          )}
+                          {row.planStatus === 'QUEUED' && (
+                            <span style={{ fontSize: '0.68rem', color: '#b8860b', fontWeight: 700 }}>⏳ Queued</span>
+                          )}
+                          {row.planStatus === 'PROCESSING' && (
+                            <button style={{ ...btnBase, background: 'linear-gradient(to bottom,#1a5faa,#0d3a6e)', color: '#fff', border: '1px solid #0d3a6e', padding: '3px 10px', fontSize: '0.7rem' }}
+                              onClick={() => actOnPlan(row.planId, 'complete-processing')}>
+                              ✓ Complete
+                            </button>
+                          )}
+                          {row.planStatus && !['PLANNED','QUEUED','PROCESSING'].includes(row.planStatus) && (
+                            <span style={{ fontSize: '0.68rem', color: '#888' }}>{statusLabel(row.planStatus)}</span>
+                          )}
+                          {!row.planStatus && <span style={{ color: '#ddd', fontSize: '0.68rem' }}>—</span>}
+                        </td>
+                      )}
                     </tr>
                   );
                 });
@@ -700,6 +830,7 @@ export default function BatchForm() {
                   {totalProducedMin > 0 ? totalProducedMin.toFixed(2) : '—'}
                 </td>
                 <td style={tdS}></td>
+                <td style={tdS}></td>
               </tr>
             </tbody>
           </table>
@@ -708,7 +839,51 @@ export default function BatchForm() {
 
       {/* ── BOTTOM BUTTONS ────────────────────────────────────────────────── */}
       <div style={{ background: '#e0e8f0', border: '1px solid #b0c4de', borderTop: 'none', padding: '8px 16px', display: 'flex', gap: 12, alignItems: 'center' }}>
-        {batches.length > 0 && (
+        {batches.length > 0 && !splitMode && (() => {
+          const planRow   = pairRows.find(r => r.planId);
+          const planStatus = planRow?.planStatus ?? null;
+          const planId     = planRow?.planId;
+          const canEdit    = !planStatus || planStatus === 'PLANNED';
+          return (
+            <>
+              {/* Save — visible while batch is unplanned or in PLANNED state */}
+              {canEdit && (
+                <button style={{ ...btnSave, opacity: (saving || !quickMachine) ? 0.6 : 1 }}
+                  onClick={saveAllTogether} disabled={saving || !quickMachine}>
+                  {saving ? 'Saving…' : 'Save'}
+                </button>
+              )}
+
+              {/* Execute — appears next to Save once batch is PLANNED */}
+              {planStatus === 'PLANNED' && (
+                <button style={{ ...btnBase, background: 'linear-gradient(to bottom,#5cb85c,#3d8b3d)', color: '#fff', border: '1px solid #3d8b3d', padding: '5px 20px' }}
+                  onClick={() => actOnPlan(planId, 'start-processing')}>
+                  ▶ Execute
+                </button>
+              )}
+
+              {planStatus === 'QUEUED' && (
+                <span style={{ fontSize: '0.78rem', color: '#b8860b', fontWeight: 700 }}>⏳ Machine busy — will start when free</span>
+              )}
+
+              {planStatus === 'PROCESSING' && (
+                <button style={{ ...btnBase, background: 'linear-gradient(to bottom,#1a5faa,#0d3a6e)', color: '#fff', border: '1px solid #0d3a6e', padding: '5px 20px' }}
+                  onClick={() => actOnPlan(planId, 'complete-processing')}>
+                  ✓ Complete
+                </button>
+              )}
+
+              {planStatus === 'COMPLETED' && (
+                <span style={{ fontSize: '0.78rem', color: '#1b5e20', fontWeight: 700 }}>✅ Completed</span>
+              )}
+
+              {planStatus && !['PLANNED','QUEUED','PROCESSING','COMPLETED'].includes(planStatus) && (
+                <span style={{ fontSize: '0.78rem', color: '#555', fontWeight: 600 }}>Status: {statusLabel(planStatus)}</span>
+              )}
+            </>
+          );
+        })()}
+        {batches.length > 0 && splitMode && (
           <button style={{ ...btnSave, opacity: saving ? 0.7 : 1 }} onClick={save} disabled={saving}>
             {saving ? 'Saving…' : 'Save'}
           </button>
@@ -716,6 +891,18 @@ export default function BatchForm() {
         <button style={btnAdd} onClick={() => { setShowAddPanel(prev => !prev); setError(''); setMsg(''); }}>
           {showAddPanel ? '− Cancel Add' : '+ Add Batch'}
         </button>
+        {batches.length > 0 && !splitMode && (() => { const qs = pairRows.find(r=>r.planId)?.planStatus; return !qs || qs === 'PLANNED'; })() && (
+          <button style={{ ...btnBase, background: 'linear-gradient(to bottom,#4a90d9,#1a5faa)', color: '#fff', border: '1px solid #1a5faa' }}
+            onClick={() => { setSplitMode(true); setError(''); setMsg(''); }}>
+            ✂ Split Batch
+          </button>
+        )}
+        {batches.length > 0 && splitMode && (
+          <button style={{ ...btnBase }}
+            onClick={() => { setSplitMode(false); setError(''); setMsg(''); }}>
+            ← Quick Entry
+          </button>
+        )}
         <button style={btnExit} onClick={clearForm}>Exit</button>
 
         {!batches.length && (

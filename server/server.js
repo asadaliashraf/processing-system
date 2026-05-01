@@ -269,6 +269,76 @@ app.get('/api/reports/detail/:batchNo', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── EFFICIENCY REPORT ─────────────────────────────────────────────────────────
+const EFFICIENCY_COLS = `
+  id, batch_no, order_no, pair_codes_str, pair_code_weight, club_group,
+  machine, machine_cap, recipe, recipe_ct_hrs,
+  ROUND(recipe_ct_hrs * 60, 4)                                            AS std_ct_min,
+  process_start, process_end, status,
+  CASE WHEN process_end IS NOT NULL
+    THEN ROUND((julianday(process_end) - julianday(process_start)) * 1440, 2)
+    ELSE NULL END                                                           AS actual_ct_min,
+  CASE WHEN process_end IS NOT NULL
+        AND (julianday(process_end) - julianday(process_start)) > 0
+    THEN ROUND(
+           (recipe_ct_hrs * 60) /
+           ((julianday(process_end) - julianday(process_start)) * 1440) * 100,
+         2)
+    ELSE NULL END                                                           AS efficiency_pct,
+  DATE(process_start)                                                       AS proc_date
+`;
+
+app.get('/api/reports/efficiency-summary', (req, res) => {
+  try {
+    const { from_date, to_date } = req.query;
+    let where = "process_start IS NOT NULL";
+    const params = [];
+    if (from_date) { where += ' AND DATE(process_start) >= ?'; params.push(from_date); }
+    if (to_date)   { where += ' AND DATE(process_start) <= ?'; params.push(to_date); }
+
+    const q = `
+      SELECT
+        DATE(process_start)                AS proc_date,
+        batch_no, order_no,
+        GROUP_CONCAT(pair_codes_str, ' | ') AS all_pair_codes,
+        GROUP_CONCAT(machine, ', ')         AS machines,
+        GROUP_CONCAT(DISTINCT recipe)       AS recipes,
+        ROUND(AVG(recipe_ct_hrs * 60), 4)  AS std_ct_min,
+        MIN(process_start)                  AS batch_start,
+        MAX(process_end)                    AS batch_end,
+        SUM(pair_code_weight)               AS total_weight,
+        COUNT(*)                            AS assignments,
+        ROUND(AVG(
+          CASE WHEN process_end IS NOT NULL
+            THEN (julianday(process_end) - julianday(process_start)) * 1440
+            ELSE NULL END
+        ), 2)                               AS avg_actual_ct_min,
+        ROUND(AVG(
+          CASE WHEN process_end IS NOT NULL
+                AND (julianday(process_end) - julianday(process_start)) > 0
+            THEN (recipe_ct_hrs * 60) /
+                 ((julianday(process_end) - julianday(process_start)) * 1440) * 100
+            ELSE NULL END
+        ), 2)                               AS avg_efficiency_pct,
+        SUM(CASE WHEN process_end IS NOT NULL THEN 1 ELSE 0 END) AS completed_assignments
+      FROM batch_process
+      WHERE ${where}
+      GROUP BY DATE(process_start), batch_no, order_no
+      ORDER BY DATE(process_start) DESC, batch_no
+    `;
+    res.json(getDb().prepare(q).all(...params));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/reports/efficiency-detail/:batchNo', (req, res) => {
+  try {
+    const q = `SELECT ${EFFICIENCY_COLS} FROM batch_process
+               WHERE batch_no=? AND process_start IS NOT NULL
+               ORDER BY id`;
+    res.json(getDb().prepare(q).all(req.params.batchNo));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── QUEUES ────────────────────────────────────────────────────────────────────
 app.get('/api/queues/machines', (req, res) => {
   try {
